@@ -1,0 +1,6 @@
+# Preservação obrigatória de quebras de linha Unix (LF) para scripts shell e containers
+*.sh text eol=lf
+*.bash text eol=lf
+Dockerfile text eol=lf
+.env.example text eol=lf
+alembic.ini text eol=lf

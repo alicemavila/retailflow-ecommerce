@@ -1,0 +1,62 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: retailflow_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?Defina POSTGRES_SUPERUSER_PASSWORD no .env}
+      POSTGRES_DB: postgres
+      POSTGRES_DEV_DB: ${POSTGRES_DEV_DB:-retailflow_dev}
+      POSTGRES_DEV_USER: ${POSTGRES_DEV_USER:-retailflow_dev_user}
+      POSTGRES_DEV_PASSWORD: ${POSTGRES_DEV_PASSWORD:?Defina POSTGRES_DEV_PASSWORD no .env}
+      POSTGRES_TEST_DB: ${POSTGRES_TEST_DB:-retailflow_test}
+      POSTGRES_TEST_USER: ${POSTGRES_TEST_USER:-retailflow_test_user}
+      POSTGRES_TEST_PASSWORD: ${POSTGRES_TEST_PASSWORD:?Defina POSTGRES_TEST_PASSWORD no .env}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-databases.sh:/docker-entrypoint-initdb.d/01-init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: retailflow_web
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-false}
+      APP_NAME: ${APP_NAME:-RetailFlow E-Commerce}
+      APP_HOST: ${APP_HOST:-0.0.0.0}
+      APP_PORT: ${APP_PORT:-8000}
+      SECRET_KEY: ${SECRET_KEY:?Defina SECRET_KEY no .env}
+      DATABASE_URL: ${DATABASE_URL:?Defina DATABASE_URL no .env}
+      POSTGRES_SERVER: ${POSTGRES_SERVER:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DEV_DB: ${POSTGRES_DEV_DB:-retailflow_dev}
+      POSTGRES_DEV_USER: ${POSTGRES_DEV_USER:-retailflow_dev_user}
+      POSTGRES_DEV_PASSWORD: ${POSTGRES_DEV_PASSWORD:?Defina POSTGRES_DEV_PASSWORD no .env}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-admin@retailflow.local}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    volumes:
+      - ./src:/app/src
+      - ./scripts:/app/scripts
+      - ./migrations:/app/migrations
+    depends_on:
+      db:
+        condition: service_healthy
+    command: uvicorn src.app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  postgres_data:
+    name: retailflow_postgres_data
