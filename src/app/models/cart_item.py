@@ -10,6 +10,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     UniqueConstraint,
     func,
@@ -26,45 +27,39 @@ if TYPE_CHECKING:
 
 
 class CartItem(Base):
-    """Tabela de itens do carrinho — UNIQUE(cart_id, product_id)."""
+    """Tabela de itens do carrinho (5 colunas aprovadas no planejamento)."""
 
     __tablename__ = "cart_items"
 
-    # Chave Primária
+    # 1. Chave Primária
     id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
 
-    # FK para Cart
+    # 2. FK para Cart
     cart_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("carts.id", ondelete="CASCADE"),
         nullable=False,
     )
 
-    # FK para Product — SET NULL não aplicável aqui; item é removido se produto for deletado
+    # 3. FK para Product
     product_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("products.id", ondelete="CASCADE"),
         nullable=False,
     )
 
-    # Quantidade
+    # 4. Quantidade
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    # Timestamps
+    # 5. Timestamp de criação (sem updated_at conforme planejamento consolidado)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
     )
 
     # Relacionamentos
@@ -80,10 +75,9 @@ class CartItem(Base):
     )
 
     __table_args__ = (
-        # Um produto por carrinho (sem duplicidade)
         UniqueConstraint("cart_id", "product_id", name="uq_cart_items_cart_id_product_id"),
-        # Quantidade deve ser positiva
         CheckConstraint("quantity > 0", name="quantity_positive"),
+        Index("ix_cart_items_product_id", "product_id"),
     )
 
     def __repr__(self) -> str:

@@ -10,12 +10,10 @@ from uuid import UUID
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
-    Enum,
     ForeignKey,
     Index,
     Integer,
     String,
-    Text,
     func,
     text,
 )
@@ -31,15 +29,14 @@ if TYPE_CHECKING:
 
 
 class MovementType(str, enum.Enum):
-    PURCHASE = "purchase"       # compra/reposição de estoque
-    SALE = "sale"               # venda (saída pelo pedido)
-    ADJUSTMENT = "adjustment"   # ajuste manual
-    RETURN = "return"           # devolução
-    LOSS = "loss"               # perda/quebra
+    PURCHASE_RECEIPT = "PURCHASE_RECEIPT"
+    SALE = "SALE"
+    ORDER_CANCELLATION = "ORDER_CANCELLATION"
+    MANUAL_ADJUSTMENT = "MANUAL_ADJUSTMENT"
 
 
 class InventoryMovement(Base):
-    """Tabela de movimentações de estoque — somente inserção (append-only)."""
+    """Tabela de movimentações de estoque — trilha append-only."""
 
     __tablename__ = "inventory_movements"
 
@@ -50,46 +47,40 @@ class InventoryMovement(Base):
         server_default=text("gen_random_uuid()"),
     )
 
-    # FK para Product — SET NULL para exclusão lógica (produto pode ser marcado DELETED)
-    product_id: Mapped[UUID | None] = mapped_column(
+    # FK para Product — NOT NULL, RESTRICT (não permite excluir produto se houver movimentações)
+    product_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("products.id", ondelete="SET NULL"),
-        nullable=True,
+        ForeignKey("products.id", ondelete="RESTRICT"),
+        nullable=False,
     )
 
-    # FK opcional para o pedido que originou a movimentação
-    order_id: Mapped[UUID | None] = mapped_column(
+    # Quantidade movimentada (positivo = entrada, negativo = saída)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Tipo de movimentação (VARCHAR(30) + CHECK constraint)
+    movement_type: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+    )
+
+    # FK opcional para o pedido de referência
+    reference_order_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("orders.id", ondelete="SET NULL"),
         nullable=True,
     )
 
-    # FK para usuário responsável pelo registro
-    performed_by: Mapped[UUID | None] = mapped_column(
+    # Motivo ou justificativa da movimentação
+    reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # FK para o usuário responsável pelo registro
+    user_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
 
-    # Tipo de movimentação
-    movement_type: Mapped[MovementType] = mapped_column(
-        Enum(MovementType, name="movement_type", create_type=True,
-             values_callable=lambda obj: [e.value for e in obj]),
-        nullable=False,
-    )
-
-    # Quantidade: positivo = entrada, negativo = saída
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
-
-    # Estoque antes e depois da movimentação
-    stock_before: Mapped[int] = mapped_column(Integer, nullable=False)
-    stock_after: Mapped[int] = mapped_column(Integer, nullable=False)
-
-    # Referência externa opcional (NF, lote, etc.)
-    reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # Timestamp (somente criação — movimentação é imutável)
+    # Timestamp de criação imutável
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -97,7 +88,7 @@ class InventoryMovement(Base):
     )
 
     # Relacionamentos
-    product: Mapped[Product | None] = relationship(
+    product: Mapped[Product] = relationship(
         "Product",
         back_populates="inventory_movements",
         lazy="raise",
@@ -107,24 +98,21 @@ class InventoryMovement(Base):
         back_populates="inventory_movements",
         lazy="raise",
     )
-    performed_by_user: Mapped[User | None] = relationship(
+    user: Mapped[User | None] = relationship(
         "User",
-        foreign_keys=[performed_by],
+        back_populates="inventory_movements",
         lazy="raise",
     )
 
     __table_args__ = (
-        # Consistência matemática: stock_after = stock_before + quantity
         CheckConstraint(
-            "stock_after = stock_before + quantity",
-            name="stock_math_consistency",
+            "movement_type IN ('PURCHASE_RECEIPT', 'SALE', 'ORDER_CANCELLATION', 'MANUAL_ADJUSTMENT')",
+            name="ck_inventory_movements_movement_type",
         ),
-        # Estoque nunca pode ser negativo
-        CheckConstraint("stock_after >= 0", name="stock_after_non_negative"),
-        CheckConstraint("stock_before >= 0", name="stock_before_non_negative"),
-        # Índices de busca
+        CheckConstraint("quantity != 0", name="ck_inventory_movements_quantity_nonzero"),
         Index("ix_inventory_movements_product_id", "product_id"),
-        Index("ix_inventory_movements_order_id", "order_id"),
+        Index("ix_inventory_movements_reference_order_id", "reference_order_id"),
+        Index("ix_inventory_movements_user_id", "user_id"),
         Index("ix_inventory_movements_created_at", "created_at"),
     )
 

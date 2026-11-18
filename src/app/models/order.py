@@ -11,11 +11,11 @@ from uuid import UUID
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
-    Enum,
     ForeignKey,
     Index,
     Numeric,
     String,
+    UniqueConstraint,
     func,
     text,
 )
@@ -32,68 +32,107 @@ if TYPE_CHECKING:
 
 
 class OrderStatus(str, enum.Enum):
-    PENDING = "pending"
-    CONFIRMED = "confirmed"
-    PROCESSING = "processing"
-    SHIPPED = "shipped"
-    DELIVERED = "delivered"
-    CANCELLED = "cancelled"
-    REFUNDED = "refunded"
+    PENDING = "PENDING"
+    PAID = "PAID"
+    PROCESSING = "PROCESSING"
+    SHIPPED = "SHIPPED"
+    DELIVERED = "DELIVERED"
+    CANCELLED = "CANCELLED"
+
+
+class PaymentMethod(str, enum.Enum):
+    SIMULATED_CARD = "SIMULATED_CARD"
+    SIMULATED_PIX = "SIMULATED_PIX"
+    SIMULATED_BOLETO = "SIMULATED_BOLETO"
+
+
+class PaymentStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
 
 
 class Order(Base):
-    """Tabela de pedidos."""
+    """Tabela de pedidos (15 colunas aprovadas no planejamento)."""
 
     __tablename__ = "orders"
 
-    # Chave Primária
+    # 1. Chave Primária
     id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
 
-    # FK para User — pedido é preservado se usuário for excluído (SET NULL)
-    user_id: Mapped[UUID | None] = mapped_column(
+    # 2. Código legível do pedido (ex: "ORD-20241118-0001")
+    order_code: Mapped[str] = mapped_column(
+        String(20), nullable=False, unique=True
+    )
+
+    # 3. Chave de idempotência por usuário
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+
+    # 4. FK para User — NOT NULL, RESTRICT (não permite excluir usuário se houver pedidos)
+    user_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-
-    # Número de pedido legível (ex: "RF-2024-000001")
-    order_number: Mapped[str] = mapped_column(
-        String(50), nullable=False, unique=True
-    )
-
-    # Status
-    status: Mapped[OrderStatus] = mapped_column(
-        Enum(OrderStatus, name="order_status", create_type=True,
-             values_callable=lambda obj: [e.value for e in obj]),
+        ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
-        server_default=text("'pending'"),
     )
 
-    # Totais financeiros — NUMERIC(10,2)
+    # 5. Status do pedido (VARCHAR(30) + CHECK)
+    status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default=OrderStatus.PENDING.value,
+        server_default=text("'PENDING'"),
+    )
+
+    # 6. Subtotal dos itens
     subtotal: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    shipping_cost: Mapped[Decimal] = mapped_column(
-        Numeric(10, 2), nullable=False, server_default=text("0.00")
-    )
-    discount_total: Mapped[Decimal] = mapped_column(
-        Numeric(10, 2), nullable=False, server_default=text("0.00")
-    )
-    grand_total: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
 
-    # Snapshot do endereço de entrega no momento do pedido (JSONB)
+    # 7. Taxa de frete
+    shipping_fee: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=Decimal("0.00"), server_default=text("0.00")
+    )
+
+    # 8. Valor total: subtotal + shipping_fee
+    total_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+
+    # 9. Snapshot do endereço de entrega no momento do pedido (JSONB, sem default, fornecimento explícito)
     shipping_address_snapshot: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+        JSONB, nullable=False
     )
 
-    # Timestamps
+    # 10. Método de pagamento simulado (sem valor padrão arbitrário)
+    payment_method: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+    )
+
+    # 11. Status do pagamento (distinto do status do pedido)
+    payment_status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default=PaymentStatus.PENDING.value,
+        server_default=text("'PENDING'"),
+    )
+
+    # 12. Bandeira do cartão (VARCHAR(20))
+    card_brand: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # 13. Últimos quatro dígitos do cartão
+    card_last_four: Mapped[str | None] = mapped_column(String(4), nullable=True)
+
+    # 14. Data de criação
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
     )
+
+    # 15. Data de atualização
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -102,7 +141,7 @@ class Order(Base):
     )
 
     # Relacionamentos
-    user: Mapped[User | None] = relationship(
+    user: Mapped[User] = relationship(
         "User",
         back_populates="orders",
         lazy="raise",
@@ -120,22 +159,30 @@ class Order(Base):
     )
 
     __table_args__ = (
-        # Consistência financeira: grand_total = subtotal + shipping_cost - discount_total
+        UniqueConstraint("user_id", "idempotency_key", name="uq_orders_user_idempotency_key"),
         CheckConstraint(
-            "grand_total = subtotal + shipping_cost - discount_total",
-            name="grand_total_math",
+            "total_amount = subtotal + shipping_fee",
+            name="ck_orders_total_amount_math",
         ),
-        # Valores não podem ser negativos
-        CheckConstraint("subtotal >= 0", name="subtotal_non_negative"),
-        CheckConstraint("shipping_cost >= 0", name="shipping_cost_non_negative"),
-        CheckConstraint("discount_total >= 0", name="discount_total_non_negative"),
-        CheckConstraint("grand_total >= 0", name="grand_total_non_negative"),
-        # Índices
+        CheckConstraint("subtotal >= 0", name="ck_orders_subtotal_non_negative"),
+        CheckConstraint("shipping_fee >= 0", name="ck_orders_shipping_fee_non_negative"),
+        CheckConstraint("total_amount >= 0", name="ck_orders_total_amount_non_negative"),
+        CheckConstraint(
+            "status IN ('PENDING', 'PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED', 'CANCELLED')",
+            name="ck_orders_status",
+        ),
+        CheckConstraint(
+            "payment_method IN ('SIMULATED_CARD', 'SIMULATED_PIX', 'SIMULATED_BOLETO')",
+            name="ck_orders_payment_method",
+        ),
+        CheckConstraint(
+            "payment_status IN ('PENDING', 'APPROVED', 'REJECTED')",
+            name="ck_orders_payment_status",
+        ),
         Index("ix_orders_user_id", "user_id"),
         Index("ix_orders_status", "status"),
         Index("ix_orders_created_at", "created_at"),
-        # order_number já possui UNIQUE — sem ix redundante
     )
 
     def __repr__(self) -> str:
-        return f"<Order id={self.id} number={self.order_number!r} status={self.status}>"
+        return f"<Order id={self.id} code={self.order_code!r} status={self.status}>"

@@ -9,8 +9,8 @@ from uuid import UUID
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
-    Enum,
     Index,
     String,
     func,
@@ -24,12 +24,13 @@ from src.app.models.base import Base
 if TYPE_CHECKING:
     from src.app.models.address import Address
     from src.app.models.cart import Cart
+    from src.app.models.inventory_movement import InventoryMovement
     from src.app.models.order import Order
 
 
 class UserRole(str, enum.Enum):
-    CUSTOMER = "customer"
-    ADMIN = "admin"
+    ADMIN = "ADMIN"
+    CUSTOMER = "CUSTOMER"
 
 
 class User(Base):
@@ -47,17 +48,17 @@ class User(Base):
     # Dados de identidade
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
-    full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    full_name: Mapped[str] = mapped_column(String(150), nullable=False)
 
-    # Papel e estado
-    role: Mapped[UserRole] = mapped_column(
-        Enum(UserRole, name="user_role", create_type=True,
-             values_callable=lambda obj: [e.value for e in obj]),
+    # Papel e estado (VARCHAR(20) + CHECK constraint)
+    role: Mapped[str] = mapped_column(
+        String(20),
         nullable=False,
-        server_default=text("'customer'"),
+        default=UserRole.CUSTOMER.value,
+        server_default=text("'CUSTOMER'"),
     )
     is_active: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("true")
+        Boolean, nullable=False, default=True, server_default=text("true")
     )
 
     # Timestamps
@@ -92,14 +93,15 @@ class User(Base):
         back_populates="user",
         lazy="raise",
     )
+    inventory_movements: Mapped[list[InventoryMovement]] = relationship(
+        "InventoryMovement",
+        back_populates="user",
+        lazy="raise",
+    )
 
-    # Índice único funcional em LOWER(email) — evita duplicidade case-insensitive
     __table_args__ = (
-        Index(
-            "ix_users_email_lower",
-            func.lower(email),  # type: ignore[arg-type]
-            unique=True,
-        ),
+        CheckConstraint("role IN ('ADMIN', 'CUSTOMER')", name="ck_users_role"),
+        Index("ix_users_email_lower", func.lower(email), unique=True),
     )
 
     def __repr__(self) -> str:

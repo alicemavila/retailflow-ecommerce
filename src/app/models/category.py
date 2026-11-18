@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import TYPE_CHECKING
-from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func, text
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy import Boolean, DateTime, Identity, Integer, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.app.models.base import Base
@@ -17,67 +15,37 @@ if TYPE_CHECKING:
 
 
 class Category(Base):
-    """Tabela de categorias de produtos (hierarquia simples via self-join)."""
+    """Tabela de categorias de produtos (PK INTEGER IDENTITY, 6 colunas aprovadas)."""
 
     __tablename__ = "categories"
 
-    # Chave Primária
-    id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+    # Chave Primária INTEGER IDENTITY (autoincrement)
+    id: Mapped[int] = mapped_column(
+        Integer,
+        Identity(always=False),
         primary_key=True,
-        server_default=text("gen_random_uuid()"),
     )
 
-    # Chave Estrangeira para categoria pai (self-join)
-    parent_id: Mapped[UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("categories.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-
-    # Campos
-    name: Mapped[str] = mapped_column(String(150), nullable=False)
-    slug: Mapped[str] = mapped_column(String(180), nullable=False, unique=True)
+    # Campos aprovados
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    slug: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(
-        default=True, nullable=False, server_default=text("true")
+        Boolean, default=True, nullable=False, server_default=text("true")
     )
 
-    # Timestamps
+    # Timestamp de criação (sem updated_at conforme planejamento consolidado)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
     )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
 
     # Relacionamentos
-    parent: Mapped[Category | None] = relationship(
-        "Category",
-        back_populates="children",
-        remote_side="Category.id",
-        lazy="raise",
-    )
-    children: Mapped[list[Category]] = relationship(
-        "Category",
-        back_populates="parent",
-        lazy="raise",
-    )
     products: Mapped[list[Product]] = relationship(
         "Product",
         back_populates="category",
         lazy="raise",
-    )
-
-    __table_args__ = (
-        # ix em parent_id para hierarquia
-        Index("ix_categories_parent_id", "parent_id"),
-        # slug já possui UNIQUE acima — não adicionar ix redundante
     )
 
     def __repr__(self) -> str:

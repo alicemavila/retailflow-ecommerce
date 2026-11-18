@@ -17,54 +17,55 @@ if TYPE_CHECKING:
 
 
 class Address(Base):
-    """Tabela de endereços vinculados a usuários."""
+    """Tabela de endereços vinculados a usuários (11 colunas aprovadas no planejamento)."""
 
     __tablename__ = "addresses"
 
-    # Chave Primária
+    # 1. Chave Primária
     id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
 
-    # Chave Estrangeira para User
+    # 2. Chave Estrangeira para User
     user_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
 
-    # Campos de endereço
-    label: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    recipient_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # 3. Logradouro
     street: Mapped[str] = mapped_column(String(255), nullable=False)
-    number: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    # 4. Número
+    number: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    # 5. Complemento
     complement: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # 6. Bairro
     neighborhood: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    # 7. Cidade
     city: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    # 8. Estado / UF
     state: Mapped[str] = mapped_column(String(2), nullable=False)
-    zip_code: Mapped[str] = mapped_column(String(10), nullable=False)
-    country: Mapped[str] = mapped_column(
-        String(3), nullable=False, server_default=text("'BRA'")
-    )
 
-    # Endereço padrão
+    # 9. CEP
+    zip_code: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    # 10. Endereço padrão
     is_default: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("false")
+        Boolean, nullable=False, default=False, server_default=text("false")
     )
 
-    # Timestamps
+    # 11. Data de criação
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
     )
 
     # Relacionamento
@@ -75,9 +76,8 @@ class Address(Base):
     )
 
     __table_args__ = (
-        # Índice de busca por usuário
         Index("ix_addresses_user_id", "user_id"),
-        # Índice único PARCIAL: só um endereço padrão por usuário
+        Index("ix_addresses_zip_code", "zip_code"),
         Index(
             "uq_addresses_user_id_is_default",
             "user_id",
