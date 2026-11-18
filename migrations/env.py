@@ -2,6 +2,10 @@
 
 import asyncio
 from logging.config import fileConfig
+import os
+import sys
+from urllib.parse import urlparse
+
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
@@ -25,7 +29,71 @@ settings = get_settings()
 
 # Suporte a --x-arg url=<custom_url> para migrações no banco de testes
 x_args = context.get_x_argument(as_dictionary=True)
-db_url = x_args.get("url") or settings.DATABASE_URL
+# Determine database URL based on environment
+if settings.ENVIRONMENT == "test":
+    # Require TEST_DATABASE_URL explicitly; no fallback to DATABASE_URL
+    test_url = os.getenv("TEST_DATABASE_URL")
+    if not test_url:
+        raise RuntimeError("VIOLAÇÃO DE SEGURANÇA: ENVIRONMENT='test' requires TEST_DATABASE_URL to be set.")
+    db_url = test_url
+else:
+    # Development or other environments
+    db_url = x_args.get("url") or settings.DATABASE_URL
+
+
+def validate_migration_safety(url_to_check: str, env_to_check: str) -> None:
+    """Salvaguarda obrigatória executada no mesmo processo antes de qualquer DDL."""
+    try:
+        from sqlalchemy.engine import make_url
+        url_obj = make_url(url_to_check)
+        db_name = url_obj.database or ""
+        user = url_obj.username or ""
+        host = url_obj.host or ""
+    except Exception:
+        parsed = urlparse(url_to_check)
+        db_name = (parsed.path or "").lstrip("/")
+        user = parsed.username or ""
+        host = parsed.hostname or ""
+
+    allowed_hosts = ("localhost", "127.0.0.1", "db", "retailflow_postgres", "postgres")
+
+    if host not in allowed_hosts:
+        raise RuntimeError(
+            f"VIOLAÇÃO DE SEGURANÇA: Host '{host}' não autorizado para migrações."
+        )
+
+    env_normalized = (env_to_check or "").strip().lower()
+
+    if env_normalized == "test":
+        if db_name != "retailflow_test":
+            raise RuntimeError(
+                f"VIOLAÇÃO DE SEGURANÇA: Ambiente 'test' requer banco 'retailflow_test'. "
+                f"Alvo rejeitado: '{db_name}'."
+            )
+        if user != "retailflow_test_user":
+            raise RuntimeError(
+                f"VIOLAÇÃO DE SEGURANÇA: Ambiente 'test' requer usuário 'retailflow_test_user'. "
+                f"Usuário rejeitado: '{user}'."
+            )
+    elif env_normalized == "development":
+        if db_name == "retailflow_test":
+            raise RuntimeError(
+                "VIOLAÇÃO DE SEGURANÇA: Ambiente 'development' não pode apontar para 'retailflow_test'!"
+            )
+        if db_name != "retailflow_dev":
+            raise RuntimeError(
+                f"VIOLAÇÃO DE SEGURANÇA: Ambiente 'development' requer banco 'retailflow_dev'. "
+                f"Alvo rejeitado: '{db_name}'."
+            )
+        if user != "retailflow_dev_user":
+            raise RuntimeError(
+                f"VIOLAÇÃO DE SEGURANÇA: Ambiente 'development' requer usuário 'retailflow_dev_user'. "
+                f"Usuário rejeitado: '{user}'."
+            )
+
+
+# Executar salvaguarda antes de configurar a URL
+validate_migration_safety(db_url, settings.ENVIRONMENT)
 
 config.set_main_option("sqlalchemy.url", db_url)
 
@@ -42,7 +110,6 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
-        # Renderiza CREATE INDEX para índices funcionais/parciais
         render_as_batch=False,
     )
 
